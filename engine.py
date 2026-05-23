@@ -9,9 +9,34 @@ from moviepy.editor import AudioFileClip, ImageClip
 api_key = st.secrets.get("GEMINI_API_KEY")
 genai.configure(api_key=api_key)
 
-# Memaksa penggunaan Gemini 1.5 Flash (Super Cepat & Kuota Gratis Stabil)
-model = genai.GenerativeModel('gemini-1.5-flash')
+# ==========================================
+# SMART AUTO-DETECT (ANTI-404 & ANTI-429)
+# ==========================================
+def get_best_free_model():
+    try:
+        # Menarik daftar mesin yang aktif diizinkan untuk API Key ini
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # Secara otomatis mencari varian 'flash' berapapun versinya (Ini adalah jalur gratis/Free Tier)
+        for m in available_models:
+            if 'flash' in m.lower():
+                return m
+                
+        # Fallback jika tidak ada tulisan flash, ambil model pertama yang tersedia
+        if available_models:
+            return available_models[0]
+            
+        return 'models/gemini-1.0-pro'
+    except Exception:
+        return 'models/gemini-1.0-pro'
 
+# Inisialisasi model secara otomatis sesuai hasil deteksi
+best_model_name = get_best_free_model()
+model = genai.GenerativeModel(best_model_name)
+
+# ==========================================
+# CORE LOGIC PRODUKSI VIDEO
+# ==========================================
 def split_script_to_json(raw_script, base_character):
     """Memecah naskah menjadi segmen 8 detik & injeksi prompt sinematik"""
     prompt = f"""
@@ -26,12 +51,10 @@ def split_script_to_json(raw_script, base_character):
     
     try:
         response = model.generate_content(prompt)
-        # Membersihkan sisa markdown jika ada
         clean_json = response.text.replace("```json\n", "").replace("\n```", "").replace("```", "").strip()
         return json.loads(clean_json)
     except Exception as e:
         st.error(f"Gagal memproses naskah dengan Google AI. Detail Error: {str(e)}")
-        # Mengembalikan array kosong agar proses tidak crash
         return []
 
 def generate_voiceover(text, segment_id):
@@ -44,22 +67,19 @@ def generate_voiceover(text, segment_id):
     return file_path
 
 def simulate_image_generation(prompt, segment_id):
-    """
-    Membuat gambar layar hitam sebagai placeholder agar engine video bisa merender.
-    """
+    """Membuat gambar layar hitam sebagai placeholder agar engine video bisa merender."""
     os.makedirs('assets/images', exist_ok=True)
     file_path = f"assets/images/placeholder_seg_{segment_id}.jpg" 
     
-    # Buat gambar dummy ukuran 9:16 (Format Video Vertikal)
     if not os.path.exists(file_path):
         from PIL import Image
-        img = Image.new('RGB', (1080, 1920), color=(25, 25, 25))
+        img = Image.new('RGB', (1080, 1920), color=(15, 15, 15))
         img.save(file_path)
 
     return file_path
 
 def compile_video_segment(image_path, audio_path, segment_id):
-    """Menggabungkan Gambar statis dan Audio menjadi Video MP4"""
+    """Menggabungkan Gambar dan Audio menjadi Video MP4"""
     os.makedirs('assets/video', exist_ok=True)
     out_path = f"assets/video/final_seg_{segment_id}.mp4"
     
