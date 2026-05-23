@@ -6,12 +6,47 @@ from gtts import gTTS
 from moviepy.editor import AudioFileClip, ImageClip
 
 # Menarik API Key dari brankas rahasia Streamlit
-api_key = st.secrets["GEMINI_API_KEY"]
+api_key = st.secrets.get("GEMINI_API_KEY")
 genai.configure(api_key=api_key)
 
-# Menggunakan model terbaru yang paling stabil di ekosistem API
-model = genai.GenerativeModel('gemini-pro')
+# ==========================================
+# FITUR BARU: AUTO-DETECT MODEL TERBAIK
+# ==========================================
+def get_optimal_model():
+    try:
+        # Menarik daftar mesin yang diizinkan untuk API Key ini
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        target_model = None
+        # Prioritas 1: Gemini 1.5 Flash (Paling cepat untuk skrip video)
+        for m in available_models:
+            if '1.5-flash' in m:
+                target_model = m
+                break
+        
+        # Prioritas 2: Gemini Pro Klasik
+        if not target_model:
+            for m in available_models:
+                if 'pro' in m:
+                    target_model = m
+                    break
+                    
+        # Prioritas 3: Ambil apa saja yang tersedia
+        if not target_model and available_models:
+            target_model = available_models[0]
+            
+        return genai.GenerativeModel(target_model if target_model else 'gemini-1.5-flash')
+        
+    except Exception as e:
+        st.error(f"Peringatan Sistem: Gagal mendeteksi model. Pastikan API Key valid. Detail: {e}")
+        return genai.GenerativeModel('gemini-1.5-flash')
 
+# Inisialisasi model secara dinamis
+model = get_optimal_model()
+
+# ==========================================
+# CORE LOGIC
+# ==========================================
 def split_script_to_json(raw_script, base_character):
     """Memecah naskah menjadi segmen 8 detik & injeksi prompt sinematik"""
     prompt = f"""
@@ -19,24 +54,22 @@ def split_script_to_json(raw_script, base_character):
     ATURAN:
     1. Durasi tiap segmen HARUS diformat untuk tepat 8 detik saat dibaca (sekitar 15-20 kata).
     2. Buat instruksi 'cinematic_prompt' tingkat Hollywood (lensa, pencahayaan, depth of field) yang mengikutsertakan karakter dasar: "{base_character}".
-    3. Output HANYA JSON array murni tanpa format markdown: [{{"order": 1, "text": "...", "prompt": "..."}}]
+    3. Output HANYA JSON array murni: [{{"order": 1, "text": "...", "prompt": "..."}}]
     
     Naskah: {raw_script}
     """
     
-    response = model.generate_content(prompt)
-    
-    # Membersihkan format markdown yang kadang ditambahkan oleh AI
-    clean_json = response.text.replace("```json\n", "").replace("\n```", "").replace("```", "").strip()
-    
     try:
+        response = model.generate_content(prompt)
+        clean_json = response.text.replace("```json\n", "").replace("\n```", "").replace("```", "").strip()
         return json.loads(clean_json)
-    except json.JSONDecodeError:
-        # Failsafe agar aplikasi web tidak crash jika format AI meleset sedikit
-        return [{"order": 1, "text": "Maaf, terjadi kesalahan format dari AI. Silakan coba lagi.", "prompt": "Error processing prompt."}]
+    except Exception as e:
+        # Menampilkan pesan error langsung ke dashboard jika Google menolak request
+        st.error(f"Gagal memproses naskah dengan Google AI. Detail Error: {str(e)}")
+        return []
 
 def generate_voiceover(text, segment_id):
-    """Menghasilkan audio menggunakan Google TTS (MVP/Lean)"""
+    """Menghasilkan audio menggunakan Google TTS"""
     os.makedirs('assets/audio', exist_ok=True)
     file_path = f"assets/audio/seg_{segment_id}.mp3"
     
@@ -46,34 +79,30 @@ def generate_voiceover(text, segment_id):
 
 def simulate_image_generation(prompt, segment_id):
     """
-    Placeholder untuk API Image Generator sesungguhnya (Midjourney/Flux).
-    Otomatis membuat gambar warna solid sementara agar MoviePy bisa melakukan render.
+    Membuat gambar layar hitam sebagai placeholder agar engine video bisa merender.
     """
     os.makedirs('assets/images', exist_ok=True)
-    file_path = f"assets/images/placeholder.jpg" 
+    file_path = f"assets/images/placeholder_seg_{segment_id}.jpg" 
     
-    # Failsafe: Buat gambar dummy 9:16 (Tiktok/Reels) jika file belum ada
+    # Buat gambar dummy ukuran 9:16 (Format Video Vertikal)
     if not os.path.exists(file_path):
         from PIL import Image
-        img = Image.new('RGB', (1080, 1920), color = (25, 25, 25))
+        img = Image.new('RGB', (1080, 1920), color=(15, 15, 15))
         img.save(file_path)
 
     return file_path
 
 def compile_video_segment(image_path, audio_path, segment_id):
-    """Menggabungkan Gambar statis dan Audio menjadi Video MP4"""
+    """Menggabungkan Gambar dan Audio menjadi Video MP4"""
     os.makedirs('assets/video', exist_ok=True)
     out_path = f"assets/video/final_seg_{segment_id}.mp4"
     
     audio = AudioFileClip(audio_path)
-    
-    # Menyamakan durasi gambar persis dengan panjang durasi voiceover
     image = ImageClip(image_path).set_duration(audio.duration) 
     
     video = image.set_audio(audio)
     video.write_videofile(out_path, fps=24, codec="libx264", audio_codec="aac", logger=None)
     
-    # Membersihkan memori sistem setelah render
     audio.close()
     video.close()
     
