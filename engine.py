@@ -10,7 +10,7 @@ api_key = st.secrets["GEMINI_API_KEY"]
 genai.configure(api_key=api_key)
 
 # Menggunakan model terbaru yang paling stabil di ekosistem API
-model = genai.GenerativeModel('gemini-1.5-flash-latest')
+model = genai.GenerativeModel('gemini-pro')
 
 def split_script_to_json(raw_script, base_character):
     """Memecah naskah menjadi segmen 8 detik & injeksi prompt sinematik"""
